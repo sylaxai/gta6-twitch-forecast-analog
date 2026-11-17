@@ -17,8 +17,11 @@
 //             [-0.5, 0.5], prediction within 0.35 of the weighted mean), then smoothed
 //             over neighbouring hours.
 //   spread    the magnitude-weighted standard deviation of the log-ratios, scaled by
-//             0.85 and combined in quadrature with a 0.05 floor term, so the 5%/95%
-//             band is honest about launch-day variation.
+//             0.85 and combined in quadrature with a 0.05 floor term and with the
+//             median's own standard error (sd / sqrt(N_eff), N_eff the effective
+//             size of the magnitude-weighted pool), so the 5%/95% band stays honest
+//             when the weights concentrate on a few launches — which is exactly
+//             what happens for the biggest launch ever.
 //   quantiles q_tau(h) = p1 * exp(median_h + z_tau * spread_h), z = standard normal
 //             quantiles at 0.05/0.25/0.5/0.75/0.95, rounded to 2 decimals.
 //
@@ -142,6 +145,12 @@ const forecastCase = (c: Case): number[][] => {
   if (pool.length < 3) return c.forecast.map(({ hour }) => baselineRow(p1, hour));
 
   const weights = pool.map((p) => Math.exp(-MAG_W * Math.abs(lnP1 - p.lnV1)));
+  // Effective size of the magnitude-weighted pool: when the target is far bigger
+  // than every comparable, the weights concentrate on a few launches and the
+  // median itself is uncertain, so its standard error widens the band below.
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  const wSq = weights.reduce((a, b) => a + b * b, 0);
+  const nEff = wSq > 0 ? (wSum * wSum) / wSq : 0;
 
   const medians: number[] = [];
   const spreads: number[] = [];
@@ -176,7 +185,8 @@ const forecastCase = (c: Case): number[][] => {
 
   return c.forecast.map(({ hour }) => {
     const hi = hour - 2;
-    const s = Math.max(0.05, Math.sqrt((SPREAD_K * spr[hi]) ** 2 + SPREAD_FLOOR ** 2));
+    const se = nEff > 0 ? spr[hi] / Math.sqrt(nEff) : 0;
+    const s = Math.max(0.05, Math.sqrt((SPREAD_K * spr[hi]) ** 2 + SPREAD_FLOOR ** 2 + se * se));
     const qs = Z.map((z) => clamp(round2(p1 * Math.exp(med[hi] + z * s)), 0.01, 1e9));
     for (let j = 1; j < qs.length; j++) qs[j] = Math.max(qs[j], qs[j - 1]);
     return qs;
